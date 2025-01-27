@@ -194,9 +194,9 @@ class EqualizerApp(QtWidgets.QMainWindow):
         self.smoothing_window_combobox.hide()
         self.apply_btn.hide()
         self.label_7.hide()
-        self.original_graph.setBackground("#ffff")
-        self.equalized_graph.setBackground("#ffff")
-        self.frequancy_graph.setBackground("#ffff")
+        self.original_graph.setBackground("white")  # Fix color format
+        self.equalized_graph.setBackground("white")
+        self.frequancy_graph.setBackground("white")
         self.selected_mode = None
         # Initialize viewer settings
         self.setup_viewers()
@@ -280,6 +280,9 @@ class EqualizerApp(QtWidgets.QMainWindow):
         self._cached_freqs = None
         self.cached = False
         self.noise_segment = None
+        self.noise_region = None
+        self.region_item = None
+        self.is_selecting_noise = False
         # ddffffffff
         
         #hghhf
@@ -347,9 +350,9 @@ class EqualizerApp(QtWidgets.QMainWindow):
 
     def setup_viewers(self):
         # Setup viewers with white backgrounds
-        self.original_graph.setBackground("#ffff")
-        self.equalized_graph.setBackground("#ffff")
-        self.frequancy_graph.setBackground("#ffff")
+        self.original_graph.setBackground("white")
+        self.equalized_graph.setBackground("white")
+        self.frequancy_graph.setBackground("white")
 
         # Enable mouse interactions
         for graph in [self.original_graph, self.equalized_graph]:
@@ -358,6 +361,8 @@ class EqualizerApp(QtWidgets.QMainWindow):
 
         # Setup spectrograms
         self.setup_spectrograms()
+        # Initialize region selection tool but don't add it yet
+        self.region_item = None
 
     def setup_controls(self):
         # Connect control buttons
@@ -839,9 +844,43 @@ class EqualizerApp(QtWidgets.QMainWindow):
         if self.selected_mode == 'Wiener Filter':
             # Hide sliders for Wiener filter mode
             self.clear_layout(self.frame_layout)
+            
+            # Add select noise region button
+            select_noise_btn = QtWidgets.QPushButton("Select Noise Region")
+            select_noise_btn.clicked.connect(self.toggle_noise_selection)
+            select_noise_btn.setMinimumHeight(40)
+            select_noise_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgb(0, 111, 163);
+                    border-radius: 10px;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: white;
+                    border: 2px solid #475c7a;
+                    border-radius: 10px;
+                    color: #34455e;
+                }
+            """)
+            self.frame_layout.addWidget(select_noise_btn)
+            
             # Add apply button for Wiener filter
             apply_button = QtWidgets.QPushButton("Apply Wiener Filter")
             apply_button.clicked.connect(self.apply_wiener_filter)
+            apply_button.setMinimumHeight(40)
+            apply_button.setStyleSheet("""
+                QPushButton {
+                    background: rgb(0, 111, 163);
+                    border-radius: 10px;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: white;
+                    border: 2px solid #475c7a;
+                    border-radius: 10px;
+                    color: #34455e;
+                }
+            """)
             self.frame_layout.addWidget(apply_button)
         else:
             # Original slider-based modes
@@ -851,6 +890,15 @@ class EqualizerApp(QtWidgets.QMainWindow):
     def apply_wiener_filter(self):
         """Apply Wiener filter to the signal"""
         if not hasattr(self, 'current_signal') or self.current_signal is None:
+            return
+
+        if self.noise_region is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Noise Region",
+                "Please select a noise region first.",
+                QtWidgets.QMessageBox.Ok
+            )
             return
 
         # Get or calculate FFT
@@ -867,13 +915,13 @@ class EqualizerApp(QtWidgets.QMainWindow):
         
         # Apply Wiener filter
         try:
-            # Compute noise and signal power spectral densities
-            noise_fft = np.fft.fft(self.noise_segment, n=len(self.current_signal.data))
+            # Compute noise and signal power spectral densities using selected region
+            noise_fft = np.fft.fft(self.noise_region, n=len(self.current_signal.data))
             noise_psd = np.abs(noise_fft)**2
             signal_psd = np.abs(self._cached_fft)**2
 
             # Compute Wiener filter
-            wiener_filter = signal_psd / (signal_psd + noise_psd.mean())
+            wiener_filter = signal_psd / (signal_psd + noise_psd)
             modified_fft = self._cached_fft * wiener_filter
 
             # Apply inverse FFT to get filtered signal
@@ -899,6 +947,42 @@ class EqualizerApp(QtWidgets.QMainWindow):
 
         except Exception as e:
             print(f"Error applying Wiener filter: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def toggle_noise_selection(self):
+        """Toggle noise region selection mode"""
+        try:
+            self.is_selecting_noise = not self.is_selecting_noise
+            
+            if self.is_selecting_noise:
+                # Create region selection tool if it doesn't exist
+                if self.region_item is None:
+                    self.region_item = pg.LinearRegionItem([0, 0], movable=True, brush=(50, 50, 200, 50))
+                    self.original_graph.addItem(self.region_item)
+                
+                # Show region selection tool
+                if self.current_signal is not None:
+                    # Set initial region to middle 20% of signal
+                    signal_len = len(self.current_signal.time)
+                    start_idx = int(signal_len * 0.4)
+                    end_idx = int(signal_len * 0.6)
+                    start_time = self.current_signal.time[start_idx]
+                    end_time = self.current_signal.time[end_idx]
+                    self.region_item.setRegion([start_time, end_time])
+                    self.region_item.show()
+            else:
+                # Hide region selection tool and store selected region
+                if self.region_item is not None:
+                    start, end = self.region_item.getRegion()
+                    # Convert time to indices
+                    start_idx = np.searchsorted(self.current_signal.time, start)
+                    end_idx = np.searchsorted(self.current_signal.time, end)
+                    self.noise_region = self.current_signal.data[start_idx:end_idx]
+                    self.region_item.hide()
+
+        except Exception as e:
+            print(f"Error in toggle_noise_selection: {str(e)}")
             import traceback
             traceback.print_exc()
 
