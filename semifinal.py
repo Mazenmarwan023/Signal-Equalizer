@@ -97,9 +97,18 @@ class AnimatedPlot:
         self.timer.setInterval(update_interval)
         self.timer.timeout.connect(self.update_plot)
         self.is_playing = False
-        self.chunk_size = 100
+        self.target_visualization_time = 4  # Target time in seconds to visualize any signal
+        self.chunk_size = self.calculate_adaptive_chunk_size(len(data_x))
         self.speed = 1.0
         self.view_range = None
+
+    def calculate_adaptive_chunk_size(self, total_points):
+        """Calculate chunk size to complete visualization in target time"""
+        # Calculate number of updates needed based on timer interval
+        total_updates = (self.target_visualization_time * 1000) / self.base_interval
+        # Calculate chunk size needed to show all points within target time
+        chunk_size = max(100, int(total_points / total_updates))
+        return chunk_size
 
     def initialize_plot(self):
         self.plot_widget.clear()
@@ -114,6 +123,7 @@ class AnimatedPlot:
             self.is_playing = False
             return
 
+        # Use adaptive chunk size
         end_index = min(self.current_index + int(self.chunk_size * self.speed), len(self.data_x))
         self.plot_data.setData(self.data_x[:end_index], self.data_y[:end_index])
         self.current_index = end_index
@@ -154,6 +164,8 @@ class AnimatedPlot:
         """Update the plot data"""
         self.data_x = new_x
         self.data_y = new_y
+        # Recalculate chunk size for new data length
+        self.chunk_size = self.calculate_adaptive_chunk_size(len(new_x))
         self.current_index = 0
         if self.is_playing:
             self.pause()
