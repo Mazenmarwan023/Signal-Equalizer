@@ -915,17 +915,26 @@ class EqualizerApp(QtWidgets.QMainWindow):
         
         # Apply Wiener filter
         try:
-            # Compute noise and signal power spectral densities using selected region
-            noise_fft = np.fft.fft(self.noise_region, n=len(self.current_signal.data))
-            noise_psd = np.abs(noise_fft)**2
+            # Improved PSD estimation with averaging
+            noise_segments = np.array_split(self.noise_region, 10)
+            noise_psd = 0
+            for seg in noise_segments:
+                noise_fft = np.fft.fft(seg, n=len(self.current_signal.data))
+                noise_psd += np.abs(noise_fft)**2
+            noise_psd /= len(noise_segments)  # Average PSD across segments
+            
+            # Better Wiener filter formula with smoothing
             signal_psd = np.abs(self._cached_fft)**2
-
-            # Compute Wiener filter
-            wiener_filter = signal_psd / (signal_psd + noise_psd)
+            wiener_filter = signal_psd / (signal_psd + 1.5*noise_psd + 1e-8)  # 1.5x noise emphasis
             modified_fft = self._cached_fft * wiener_filter
 
             # Apply inverse FFT to get filtered signal
             filtered_signal = np.real(np.fft.ifft(modified_fft))
+            
+            # Normalize to [-1, 1] range for proper audio playback
+            max_val = np.max(np.abs(filtered_signal))
+            if max_val > 0:
+                filtered_signal = filtered_signal / max_val
 
             # Update equalized signal
             self.equalized_bool = True
@@ -937,7 +946,7 @@ class EqualizerApp(QtWidgets.QMainWindow):
             self.plot_spectrogram(filtered_signal, self.current_signal.sample_rate, 
                                 self.spectrogram_after)
 
-            # Update animated plot
+            # Update animated plot if it exists
             if self.equalized_animated_plot:
                 self.equalized_animated_plot.update_data(
                     self.time_eq_signal.time,
@@ -980,6 +989,20 @@ class EqualizerApp(QtWidgets.QMainWindow):
                     end_idx = np.searchsorted(self.current_signal.time, end)
                     self.noise_region = self.current_signal.data[start_idx:end_idx]
                     self.region_item.hide()
+
+            # Add visual feedback for selected region
+            self.region_item.setBrush((200, 50, 50, 50))  # Red tint for noise region
+            self.region_item.setZValue(10)
+
+            # Verify selected region contains actual noise
+            if len(self.noise_region) / self.current_signal.sample_rate < 0.1:  # At least 100ms
+                QtWidgets.QMessageBox.warning(
+                    self, 
+                    "Invalid Noise Region",
+                    "Please select a longer noise sample (≥0.1 seconds)",
+                    QtWidgets.QMessageBox.Ok
+                )
+                return
 
         except Exception as e:
             print(f"Error in toggle_noise_selection: {str(e)}")
@@ -1036,6 +1059,25 @@ class EqualizerApp(QtWidgets.QMainWindow):
             self.label_3.setVisible(True)
             self.specto_frame_after.show()
             self.label_4.setVisible(True)
+
+    def plot_filter_response(self):
+        """Show filter frequency response for verification"""
+        if not hasattr(self, 'wiener_filter'):
+            return
+        
+        fig = Figure(figsize=(6, 4))
+        ax = fig.add_subplot(111)
+        freqs = np.fft.fftshift(self._cached_freqs)
+        response = np.fft.fftshift(20 * np.log10(self.wiener_filter + 1e-8))
+        
+        ax.plot(freqs, response)
+        ax.set_title("Wiener Filter Frequency Response")
+        ax.set_xlabel("Frequency (Hz)")
+        ax.set_ylabel("Attenuation (dB)")
+        ax.set_xlim(0, self.current_signal.sample_rate/2)
+        
+        canvas = FigureCanvas(fig)
+        canvas.show()  # Shows in new window for verification
 
 
 def main():
